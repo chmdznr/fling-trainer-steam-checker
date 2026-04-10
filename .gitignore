@@ -1,0 +1,28 @@
+# AI assistant config
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.claude/
+
+# Cache
+fling_steam_cache.json
+
+# Output Excel files
+*.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Unrelated docs
+docs/
