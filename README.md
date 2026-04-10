@@ -1,6 +1,6 @@
 # FLiNG Trainer + Steam Deck Compatibility Checker
 
-Script otomasi untuk mencari game yang punya trainer (cheat) dari [FLiNG Trainer](https://flingtrainer.com/) dan mengecek kompatibilitasnya dengan Steam Deck, termasuk harga dan rating di Steam Store.
+CLI tool untuk mencari game yang punya trainer (cheat) dari [FLiNG Trainer](https://flingtrainer.com/) dan mengecek kompatibilitasnya dengan Steam Deck, termasuk harga dan rating di Steam Store.
 
 Supports multiple regions/currencies — works worldwide, not just Indonesia!
 
@@ -16,6 +16,21 @@ Membantu memilih game yang **enjoyable di Steam Deck** — karena punya trainer 
 4. **Cek harga** — dalam mata uang lokal (configurable per country)
 5. **Cek rating** — persentase review positif dan total review
 6. **Output ke Excel** — formatted, color-coded, sorted by Deck compatibility
+
+## Project Structure
+
+```
+fling_steam_checker.py     # Entry point (thin wrapper)
+fling_checker/
+├── __init__.py             # Re-exports all public names
+├── config.py              # Config dataclass, CURRENCY_MAP, URL constants
+├── cache.py               # JSON cache load/save
+├── fling.py               # FLiNG Trainer web scraping
+├── steam.py               # Steam Store API (search, details, deck compat, reviews)
+├── processor.py            # Orchestration + concurrent processing
+├── excel.py               # Excel output with formatting
+└── cli.py                 # CLI argument parsing + main()
+```
 
 ## Quick Start
 
