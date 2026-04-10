@@ -137,7 +137,8 @@ def write_excel(results: list[dict], output_path: Path, config: Config):
         ["On Sale (Deck OK)", len(on_sale)],
         ["Free Games", free_games],
         ["Region", f"{config.country_code} ({config.currency_code})"],
-        ["Generated", r.get("last_fetched", "N/A")],
+        ["Generated", "N/A" if not results else results[0].get("last_fetched", "N/A")],
+
     ]
 
     for row in summary_data:

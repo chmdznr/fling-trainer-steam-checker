@@ -106,7 +106,14 @@ def main():
         print(f"\n💲 Step 2b: No cached entries to refresh.")
 
     # Merge results
-    all_results = new_results + refreshed_cached
+    # Start with everything currently in the cache
+    all_results = list(cache.values())
+
+    # Update with newly fetched results and refreshed cached entries
+    for r in new_results + refreshed_cached:
+        all_results = [item for item in all_results if item["trainer_url"] != r["trainer_url"]]
+        all_results.append(r)
+
 
     # Update cache
     print(f"\n💾 Updating cache...")
