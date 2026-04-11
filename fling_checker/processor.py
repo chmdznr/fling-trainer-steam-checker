@@ -20,9 +20,10 @@ import time
 def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
     """Process a single new trainer: full Steam lookup (search + deck + details + reviews)."""
     game_name = trainer["game_name"]
+    trainer_slug = trainer.get("trainer_slug")
     now = datetime.now().isoformat()
 
-    steam_match = search_steam_appid(game_name, config)
+    steam_match = search_steam_appid(game_name, config, trainer_slug=trainer_slug)
     time.sleep(config.request_delay)
 
     if not steam_match:

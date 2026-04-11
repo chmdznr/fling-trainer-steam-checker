@@ -4,6 +4,7 @@ import json
 import re
 import time
 import requests
+from tqdm import tqdm
 
 from fling_checker.config import (
     print, Config,
@@ -56,29 +57,92 @@ def _clean_game_name(game_name: str) -> str:
     return name.strip()
 
 
-def search_steam_appid(game_name: str, config: Config) -> dict | None:
-    """Search Steam Store for a game by name. Returns first match or None."""
+def search_steam_appid(game_name: str, config: Config, trainer_slug: str = None) -> dict | None:
+    """Search Steam Store for a game by name using multiple strategies."""
     search_name = _clean_game_name(game_name)
-    params = {"term": search_name, "cc": config.country_code, "l": "english"}
-    resp = steam_request(STEAM_SEARCH_URL, params=params, config=config)
-    if resp is None:
-        return None
+    
+    # Strategy 0: Manual Overrides from JSON file
+    # Check by full search_name or trainer_slug
+    if search_name in config.overrides:
+        appid = config.overrides[search_name]
+        if config.verbose:
+            tqdm.write(f"    [Override] Found '{search_name}' in overrides -> AppID {appid}")
+        return {"appid": int(appid), "name": search_name}
+    
+    if trainer_slug and trainer_slug in config.overrides:
+        appid = config.overrides[trainer_slug]
+        if config.verbose:
+            tqdm.write(f"    [Override] Found slug '{trainer_slug}' in overrides -> AppID {appid}")
+        return {"appid": int(appid), "name": search_name}
 
-    try:
-        data = resp.json()
-    except json.JSONDecodeError:
-        return None
-    items = data.get("items", [])
-    if not items:
-        return None
+    def normalize(n: str) -> str:
+        # Lowercase and strip special chars
+        n = re.sub(r"[^\w\s]", "", n.lower())
+        # Replace Roman Numerals with digits for comparison
+        n = n.replace(" ii", " 2").replace(" iii", " 3").replace(" iv", " 4")
+        return " ".join(n.split())
 
-    # Try exact match first (compare against cleaned name)
-    for item in items:
-        if item["name"].lower() == search_name.lower():
-            return {"appid": item["id"], "name": item["name"]}
+    norm_target = normalize(search_name)
+    
+    # Define search terms to try (Full Name, Slug if available)
+    search_terms = [search_name]
+    if trainer_slug:
+        # 'long-yin-li-zhi-zhuan' -> 'long yin li zhi zhuan'
+        search_terms.append(trainer_slug.replace("-", " "))
 
-    # Fallback to first result
-    return {"appid": items[0]["id"], "name": items[0]["name"]}
+    # Strategy 1: Steam Suggest API (Very robust)
+    suggest_url = "https://store.steampowered.com/search/suggest"
+    for term in search_terms:
+        suggest_params = {"term": term, "f": "games", "cc": config.country_code, "l": "english"}
+        resp = steam_request(suggest_url, params=suggest_params, config=config)
+        time.sleep(0.5) # Polite delay
+        if resp and resp.text:
+            matches = re.findall(r'data-ds-appid="(\d+)".*?<div class="match_name">([^<]+)</div>', resp.text, re.DOTALL)
+            for appid, s_name in matches:
+                if normalize(s_name) == norm_target or norm_target in normalize(s_name) or normalize(s_name) in norm_target:
+                    return {"appid": int(appid), "name": s_name}
+
+    # Strategy 2: Official StoreSearch API (Fallback)
+    search_strategies = []
+    for term in search_terms:
+        search_strategies.append({"term": term, "cc": config.country_code})
+        words = term.split()
+        if len(words) > 2:
+            search_strategies.append({"term": " ".join(words[:2]), "cc": config.country_code})
+        search_strategies.append({"term": term, "cc": "US"})
+    
+    for strategy in search_strategies:
+        params = {**strategy, "l": "english"}
+        resp = steam_request(STEAM_SEARCH_URL, params=params, config=config)
+        time.sleep(0.5) # Polite delay
+        if not resp:
+            continue
+        try:
+            data = resp.json()
+            items = data.get("items", [])
+            for item in items:
+                if normalize(item["name"]) == norm_target or norm_target in normalize(item["name"]):
+                    return {"appid": item["id"], "name": item["name"]}
+        except:
+            continue
+
+    # Strategy 3: Fuzzy Word Fallback (Try searching longest words individually)
+    words = sorted(search_name.split(), key=len, reverse=True)
+    for word in words[:2]:
+        if len(word) < 4: continue
+        params = {"term": word, "cc": config.country_code, "l": "english"}
+        resp = steam_request(STEAM_SEARCH_URL, params=params, config=config)
+        time.sleep(0.5) # Polite delay
+        if resp:
+            try:
+                data = resp.json()
+                for item in data.get("items", []):
+                    s_name_norm = normalize(item["name"])
+                    if norm_target in s_name_norm or s_name_norm in norm_target:
+                        return {"appid": item["id"], "name": item["name"]}
+            except: continue
+
+    return None
 
 
 def get_steam_app_details(appid: int, config: Config) -> dict | None:
@@ -108,7 +172,13 @@ def get_steam_deck_compat(appid: int, config: Config) -> str:
         return "Unknown"
 
     # Steam Deck API returns resolved_category at top level of "results"
-    resolved_category = data.get("results", {}).get("resolved_category", 0)
+    # Note: If no data, "results" might be an empty list [] instead of a dict
+    results = data.get("results")
+    if isinstance(results, dict):
+        resolved_category = results.get("resolved_category", 0)
+    else:
+        resolved_category = 0
+        
     return DECK_COMPAT_MAP.get(resolved_category, "Unknown")
 
 
@@ -152,6 +222,27 @@ def extract_price_info(app_data: dict, config: Config) -> dict:
         }
 
     price_overview = app_data.get("price_overview")
+    if not price_overview:
+        # Fallback to package_groups if price_overview is missing (common for pre-orders)
+        package_groups = app_data.get("package_groups", [])
+        if package_groups:
+            subs = package_groups[0].get("subs", [])
+            if subs:
+                first_sub = subs[0]
+                final_cents = first_sub.get("price_in_cents_with_discount", 0)
+                discount = first_sub.get("percent_savings", 0)
+                # Calculate initial if discount > 0
+                if discount > 0:
+                    initial_cents = int(final_cents / (1 - discount / 100))
+                else:
+                    initial_cents = final_cents
+                
+                price_overview = {
+                    "final": final_cents,
+                    "initial": initial_cents,
+                    "discount_percent": discount
+                }
+
     if not price_overview:
         # Free or not available for purchase in this region
         purchase_type = app_data.get("type", "")

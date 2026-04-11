@@ -72,7 +72,7 @@ class Config:
     min_year: int = 2024
     country_code: str = "ID"
     request_delay: float = 1.5
-    max_workers: int = 4
+    max_workers: int = 2
     max_retries: int = 3
     cache_price_ttl_hours: int = 24
     cache_full_ttl_days: int = 7
@@ -81,12 +81,26 @@ class Config:
     verbose: bool = False
     # derived:
     currency: dict = field(default_factory=dict)
+    overrides: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.output_dir is None:
             self.output_dir = Path.cwd()
         self.currency = CURRENCY_MAP.get(self.country_code, DEFAULT_CURRENCY)
         self.cache_path = self.output_dir / "fling_steam_cache.json"
+        self.overrides_path = self.output_dir / "fling_steam_overrides.json"
+        self._load_overrides()
+
+    def _load_overrides(self):
+        if self.overrides_path.exists():
+            try:
+                import json
+                with open(self.overrides_path, "r") as f:
+                    self.overrides = json.load(f)
+                if self.verbose:
+                    print(f"    Loaded {len(self.overrides)} AppID overrides from {self.overrides_path}")
+            except Exception as e:
+                print(f"  ⚠ Warning: Failed to load overrides file: {e}")
 
     @property
     def currency_code(self) -> str:

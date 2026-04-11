@@ -112,9 +112,13 @@ def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
             if day_tag and month_tag and year_tag:
                 trainer_date_display = f"{day_tag.text.strip()} {month_tag.text.strip()} {year_tag.text.strip()}"
 
+            # Extract slug from URL (e.g., https://flingtrainer.com/trainer/game-name-trainer/ -> game-name)
+            trainer_slug = trainer_url.strip("/").split("/")[-1].removesuffix("-trainer")
+
             trainer_entry = {
                 "game_name": game_name,
                 "trainer_url": trainer_url,
+                "trainer_slug": trainer_slug,
                 "trainer_date": trainer_date_str,
                 "trainer_date_str": trainer_date_display,
                 "trainer_year": trainer_year,
