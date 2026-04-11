@@ -1,5 +1,7 @@
 """Steam Store API functions."""
 
+import json
+import re
 import time
 import requests
 
@@ -41,25 +43,42 @@ def steam_request(url: str, params: dict, config: Config, timeout: int = 10) -> 
     return None
 
 
+def _clean_game_name(game_name: str) -> str:
+    """Strip FLiNG-specific suffixes from game name for Steam search.
+
+    FLiNG appends ' Trainer' (and sometimes version info like ' v1.2+')
+    to game names. These must be removed before searching Steam.
+    """
+    # Remove " Trainer" suffix (FLiNG naming convention)
+    name = game_name.removesuffix(" Trainer")
+    # Remove trailing version info like " v1.0" or " v1.0-v1.2+"
+    name = re.sub(r"\s+v[\d.]+\S*$", "", name)
+    return name.strip()
+
+
 def search_steam_appid(game_name: str, config: Config) -> dict | None:
     """Search Steam Store for a game by name. Returns first match or None."""
-    params = {"term": game_name, "cc": config.country_code, "l": "english"}
+    search_name = _clean_game_name(game_name)
+    params = {"term": search_name, "cc": config.country_code, "l": "english"}
     resp = steam_request(STEAM_SEARCH_URL, params=params, config=config)
     if resp is None:
         return None
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        return None
     items = data.get("items", [])
     if not items:
         return None
 
-    # Try exact match first
+    # Try exact match first (compare against cleaned name)
     for item in items:
-        if item["name"].lower() == game_name.lower():
-            return item
+        if item["name"].lower() == search_name.lower():
+            return {"appid": item["id"], "name": item["name"]}
 
     # Fallback to first result
-    return items[0]
+    return {"appid": items[0]["id"], "name": items[0]["name"]}
 
 
 def get_steam_app_details(appid: int, config: Config) -> dict | None:
@@ -85,14 +104,12 @@ def get_steam_deck_compat(appid: int, config: Config) -> str:
 
     try:
         data = resp.json()
-        results = data.get("results", {}).get("app", {}).get("compat", [])
-        if results:
-            category = results[0].get("category", 0)
-            return DECK_COMPAT_MAP.get(category, "Unknown")
-    except (KeyError, IndexError, ValueError):
-        pass
+    except json.JSONDecodeError:
+        return "Unknown"
 
-    return "Unknown"
+    # Steam Deck API returns resolved_category at top level of "results"
+    resolved_category = data.get("results", {}).get("resolved_category", 0)
+    return DECK_COMPAT_MAP.get(resolved_category, "Unknown")
 
 
 def get_steam_reviews(appid: int, config: Config) -> dict:
@@ -100,9 +117,10 @@ def get_steam_reviews(appid: int, config: Config) -> dict:
     url = STEAM_REVIEWS_URL.format(appid=appid)
     params = {
         "json": 1,
-        "num_per_page": 0,
+        "language": "all",
         "purchase_type": "all",
-        "language": "english",
+        "num_per_page": 0,
+        "review_type": "all",
     }
     resp = steam_request(url, params=params, config=config)
     if resp is None:
@@ -110,18 +128,19 @@ def get_steam_reviews(appid: int, config: Config) -> dict:
 
     try:
         data = resp.json()
-        summary = data.get("query_summary", {})
-        total = summary.get("total_reviews", 0)
-        positive = summary.get("total_positive", 0)
-        pct = round(positive / total * 100, 1) if total > 0 else 0
-        desc = summary.get("review_score_desc", "Not Found")
-        return {
-            "total_reviews": total,
-            "positive_pct": pct,
-            "review_desc": desc,
-        }
-    except (KeyError, ValueError):
+    except json.JSONDecodeError:
         return {"total_reviews": 0, "positive_pct": 0, "review_desc": "Not Found"}
+
+    summary = data.get("query_summary", {})
+    total = summary.get("total_reviews", 0)
+    positive = summary.get("total_positive", 0)
+    pct = round(positive / total * 100, 1) if total > 0 else 0
+    desc = summary.get("review_score_desc", "No Reviews")
+    return {
+        "total_reviews": total,
+        "positive_pct": pct,
+        "review_desc": desc,
+    }
 
 
 def extract_price_info(app_data: dict, config: Config) -> dict:
@@ -152,15 +171,20 @@ def extract_price_info(app_data: dict, config: Config) -> dict:
     final_cents = price_overview.get("final", 0)
     initial_cents = price_overview.get("initial", 0)
 
+    # Steam always provides prices in the smallest currency unit (cents).
+    # Divide by 100 for all currencies to get the base value.
+    final_val = final_cents / 100
+    initial_val = initial_cents / 100
+
     if currency["decimal"]:
-        price_str = f"{symbol}{final_cents / 100:,.2f}"
+        price_str = f"{symbol}{final_val:,.2f}"
     else:
-        price_str = f"{symbol}{final_cents:,.0f}"
+        price_str = f"{symbol}{final_val:,.0f}"
 
     return {
         "price": price_str,
-        "price_idr": price_overview.get("final", 0) / 100,
-        "original_price_idr": price_overview.get("initial", 0) / 100,
+        "price_idr": final_val,
+        "original_price_idr": initial_val,
         "discount_pct": price_overview.get("discount_percent", 0),
         "on_sale": price_overview.get("discount_percent", 0) > 0,
     }

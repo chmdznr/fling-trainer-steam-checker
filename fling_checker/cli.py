@@ -100,8 +100,10 @@ def main():
 
     # Step 2b: Refresh prices for cached entries
     refreshed_cached = []
-    if cached_results:
-        refreshed_cached = refresh_prices(cached_results, config)
+    # Refresh all cached entries that have a Steam ID, not just those found during scraping
+    cached_with_ids = [r for r in cache.values() if r.get("steam_appid")]
+    if cached_with_ids:
+        refreshed_cached = refresh_prices(cached_with_ids, config)
     else:
         print(f"\n💲 Step 2b: No cached entries to refresh.")
 
@@ -116,10 +118,13 @@ def main():
 
 
     # Update cache
-    print(f"\n💾 Updating cache...")
-    for r in all_results:
-        cache[r["trainer_url"]] = r
-    save_cache(cache, config)
+    if all_results:
+        print(f"\n💾 Updating cache...")
+        for r in all_results:
+            cache[r["trainer_url"]] = r
+        save_cache(cache, config)
+    else:
+        print(f"\n💾 No new data to update cache.")
 
     # Step 3: Write Excel
     timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M")

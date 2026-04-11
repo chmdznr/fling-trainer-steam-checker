@@ -65,9 +65,9 @@ def write_excel(results: list[dict], output_path: Path, config: Config):
 
         row_data = [
             r.get("game_name", ""),
-            r.get("trainer_date_str", r.get("trainer_date", "")),
-            r.get("options_count", r.get("num_options", 0)),
-            r.get("last_updated", r.get("version_info", "")),
+            r.get("trainer_date_str", "") or r.get("trainer_date", ""),
+            r.get("options_count", r.get("num_options", 0)) or 0,
+            r.get("last_updated", ""),
             r.get("steam_name", ""),
             r.get("steam_appid", ""),
             r.get("deck_compat", "Unknown"),

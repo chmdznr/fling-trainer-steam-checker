@@ -11,6 +11,7 @@ from fling_checker.cache import load_cache, save_cache
 from fling_checker.fling import scrape_fling_trainers
 from fling_checker.steam import (
     steam_request, search_steam_appid,
+    _clean_game_name,
     get_steam_app_details, get_steam_deck_compat,
     get_steam_reviews, extract_price_info,
 )

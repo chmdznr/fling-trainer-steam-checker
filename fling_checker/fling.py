@@ -34,22 +34,40 @@ def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
             break
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        articles = soup.select("article.post")
+        # Try multiple selectors to be more robust against site changes
+        articles = soup.select("article.post") or soup.select("article") or soup.find_all("div", class_="post")
 
         if not articles:
+            if config.verbose:
+                print(f"    [Debug] No articles found on page {page}. HTML snippet: {resp.text[:500]}...")
+            # If page 1 is empty, we might be blocked or the site changed significantly
+            if page == 1:
+                print(f"  ⚠ Warning: No trainers found on the first page. The site structure may have changed.")
             break
 
         for article in articles:
-            title_tag = article.select_one("h2.entry-title a")
+            title_tag = article.select_one("h2.post-title a") or article.select_one("h2.entry-title a")
             if not title_tag:
                 continue
 
             game_name = title_tag.text.strip()
             trainer_url = title_tag["href"]
 
-            # Extract trainer date from URL or article
-            date_tag = article.select_one("time.entry-date")
-            trainer_date_str = date_tag["datetime"][:10] if date_tag else ""
+            # Extract trainer date — new site uses div-based date, old site used <time>
+            day_tag = article.select_one(".post-details-day")
+            month_tag = article.select_one(".post-details-month")
+            year_tag = article.select_one(".post-details-year")
+            if day_tag and month_tag and year_tag:
+                month_map = {
+                    "Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04",
+                    "May": "05", "Jun": "06", "Jul": "07", "Aug": "08",
+                    "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12",
+                }
+                month_str = month_map.get(month_tag.text.strip(), "01")
+                trainer_date_str = f"{year_tag.text.strip()}-{month_str}-{day_tag.text.strip().zfill(2)}"
+            else:
+                date_tag = article.select_one("time.entry-date") or article.select_one("time")
+                trainer_date_str = date_tag["datetime"][:10] if date_tag and date_tag.get("datetime") else ""
 
             # Extract year from date
             try:
@@ -58,27 +76,52 @@ def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
                 trainer_year = 0
 
             if trainer_year < config.min_year:
+                # We've hit the year boundary.
+                # Mark for stopping, but finish the current page to be thorough.
                 stop_scraping = True
                 continue
 
-            # Extract version/update info
-            version_tag = article.select_one(".entry-content p")
+            # Extract version/update info from listing page excerpt
             version_info = ""
-            if version_tag:
-                version_info = version_tag.text.strip()[:100]
+            entry_div = article.select_one(".entry") or article.select_one(".entry-content")
+            if entry_div:
+                full_text = entry_div.get_text(strip=True)
+                # Remove "Continue reading…" suffix if present
+                full_text = re.sub(r"\s*Continue reading.*$", "", full_text)
+                version_info = full_text[:100]
 
-            # Count options from article
-            options_tag = article.select_one(".entry-content")
-            num_options = 0
-            if options_tag:
-                num_options = len(options_tag.select("li"))
+            # Parse individual fields from version_info
+            options_count = None
+            game_version = ""
+            last_updated = ""
+            if version_info:
+                opt_match = re.match(r"(\d+)\s+Options", version_info)
+                if opt_match:
+                    options_count = int(opt_match.group(1))
+
+                version_match = re.search(r"Game Version:\s*(.+?)(?:\s*·|$)", version_info)
+                if version_match:
+                    game_version = version_match.group(1).strip()
+
+                updated_match = re.search(r"Last Updated:\s*([\d.]+)", version_info)
+                if updated_match:
+                    last_updated = updated_match.group(1).strip()
+
+            # Also derive a human-readable date string
+            trainer_date_display = ""
+            if day_tag and month_tag and year_tag:
+                trainer_date_display = f"{day_tag.text.strip()} {month_tag.text.strip()} {year_tag.text.strip()}"
 
             trainer_entry = {
                 "game_name": game_name,
                 "trainer_url": trainer_url,
                 "trainer_date": trainer_date_str,
+                "trainer_date_str": trainer_date_display,
                 "trainer_year": trainer_year,
-                "num_options": num_options,
+                "options_count": options_count,
+                "num_options": options_count or 0,
+                "game_version": game_version,
+                "last_updated": last_updated,
                 "version_info": version_info,
             }
 

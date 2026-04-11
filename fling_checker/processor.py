@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from fling_checker.config import print, Config
 from fling_checker.steam import (
+    _clean_game_name,
     search_steam_appid,
     get_steam_app_details,
     get_steam_deck_compat,
@@ -25,7 +26,11 @@ def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
     time.sleep(config.request_delay)
 
     if not steam_match:
-        tqdm.write(f"  ⚠ {game_name} — not found on Steam")
+        search_name = _clean_game_name(game_name)
+        if config.verbose and search_name != game_name:
+            tqdm.write(f"  ⚠ {game_name} (searched: {search_name}) — not found on Steam")
+        else:
+            tqdm.write(f"  ⚠ {game_name} — not found on Steam")
         return {
             **trainer,
             "steam_appid": None, "steam_name": None, "steam_url": None,
