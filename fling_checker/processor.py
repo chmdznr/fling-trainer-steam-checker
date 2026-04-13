@@ -13,6 +13,7 @@ from fling_checker.steam import (
     get_steam_deck_compat,
     get_steam_reviews,
     extract_price_info,
+    extract_genres,
 )
 import time
 
@@ -39,6 +40,7 @@ def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
             "price": "N/A", "price_idr": None, "original_price_idr": None,
             "discount_pct": 0, "on_sale": False,
             "total_reviews": 0, "positive_pct": 0, "review_desc": "Not Found",
+            "genres": "",
             "last_fetched": now,
             "_price_updated_at": None,
             "_country_code": config.country_code,
@@ -64,12 +66,16 @@ def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
     if price_info.get("on_sale"):
         tqdm.write(f"  💰 ON SALE: {game_name} — {price_info['price']} (-{price_info['discount_pct']}%)")
 
+    # Extract genres from app_details
+    genres = extract_genres(app_details) if app_details else ""
+
     return {
         **trainer,
         "steam_appid": appid, "steam_name": steam_name,
         "steam_url": f"https://store.steampowered.com/app/{appid}/",
         "deck_compat": deck_compat,
         **price_info, **reviews,
+        "genres": genres,
         "last_fetched": now,
         "_price_updated_at": now if price_info.get("price_idr") is not None else None,
         "_country_code": config.country_code,

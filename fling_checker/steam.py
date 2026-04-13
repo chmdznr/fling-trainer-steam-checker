@@ -236,7 +236,7 @@ def extract_price_info(app_data: dict, config: Config) -> dict:
                     initial_cents = int(final_cents / (1 - discount / 100))
                 else:
                     initial_cents = final_cents
-                
+
                 price_overview = {
                     "final": final_cents,
                     "initial": initial_cents,
@@ -279,3 +279,11 @@ def extract_price_info(app_data: dict, config: Config) -> dict:
         "discount_pct": price_overview.get("discount_percent", 0),
         "on_sale": price_overview.get("discount_percent", 0) > 0,
     }
+
+
+def extract_genres(app_data: dict) -> str:
+    """Extract genre descriptions from app details as comma-separated string."""
+    genres_list = app_data.get("genres", [])
+    if not genres_list:
+        return ""
+    return ", ".join(g.get("description", "") for g in genres_list if g.get("description"))

@@ -40,6 +40,7 @@ def write_excel(results: list[dict], output_path: Path, config: Config):
         config.price_header,
         "Original Price", "Discount %", "On Sale",
         "Rating", "Rating %", "Total Reviews",
+        "Genres",
         "Trainer URL", "Steam URL",
     ]
 
@@ -78,6 +79,7 @@ def write_excel(results: list[dict], output_path: Path, config: Config):
             r.get("review_desc", ""),
             r.get("positive_pct", 0),
             r.get("total_reviews", 0),
+            r.get("genres", ""),
             r.get("trainer_url", ""),
             r.get("steam_url", ""),
         ]
@@ -108,7 +110,7 @@ def write_excel(results: list[dict], output_path: Path, config: Config):
     col_widths = {
         1: 35, 2: 12, 3: 8, 4: 18, 5: 35, 6: 12,
         7: 18, 8: 14, 9: 14, 10: 10, 11: 8,
-        12: 22, 13: 10, 14: 12, 15: 45, 16: 45,
+        12: 22, 13: 10, 14: 12, 15: 25, 16: 45, 17: 45,
     }
     for col, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col)].width = width
