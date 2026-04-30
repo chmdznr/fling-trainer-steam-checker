@@ -53,6 +53,11 @@ def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
             game_name = title_tag.text.strip()
             trainer_url = title_tag["href"]
 
+            # Homepage may include non-trainer posts (announcements etc.).
+            # Trainer posts always live under /trainer/<slug>/.
+            if "/trainer/" not in trainer_url:
+                continue
+
             # Extract trainer date — new site uses div-based date, old site used <time>
             day_tag = article.select_one(".post-details-day")
             month_tag = article.select_one(".post-details-month")

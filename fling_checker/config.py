@@ -50,8 +50,14 @@ DEFAULT_CURRENCY = {"symbol": "$", "code": "USD", "decimal": True, "sep": ","}
 
 # ─── Steam URLs ────────────────────────────────────────────────
 
-FLING_BASE_URL = "https://flingtrainer.com/category/trainer/page/{page}/"
-FLING_FIRST_PAGE = "https://flingtrainer.com/category/trainer/"
+# Use the site root rather than /category/trainer/. The category archive is
+# ordered by post published_time, so trainers that get re-released years later
+# (e.g. Graveyard Keeper, Starfield, Wartales — originally posted 2018-2023,
+# updated in 2026) get buried on old pages and miss the min_year cutoff.
+# The homepage is ordered by modified_time, which matches "Recently Updated"
+# and surfaces re-uploads at the top.
+FLING_BASE_URL = "https://flingtrainer.com/page/{page}/"
+FLING_FIRST_PAGE = "https://flingtrainer.com/"
 STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
 STEAM_APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
