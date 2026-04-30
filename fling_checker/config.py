@@ -122,9 +122,11 @@ class Config:
 
     @property
     def price_number_format(self) -> str:
+        # `,` in Excel format codes is the thousand-separator placeholder —
+        # Excel localizes it to `.` on ID locale, `,` on US locale, etc.
         if self.currency.get("decimal", True):
             return "#,##0.00"
-        return "#.##0"
+        return "#,##0"
 
 
 def build_session() -> requests.Session:

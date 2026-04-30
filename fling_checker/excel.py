@@ -94,10 +94,13 @@ def write_excel(results: list[dict], output_path: Path, config: Config):
         elif deck_cell.value == "Unsupported":
             deck_cell.fill = unsupported_fill
 
-        # Format price column
+        # Format price columns (H = current price, I = original price)
         price_cell = ws.cell(row=row_idx, column=8)
         if isinstance(price_val, (int, float)):
             price_cell.number_format = config.price_number_format
+        orig_cell = ws.cell(row=row_idx, column=9)
+        if isinstance(orig_val, (int, float)):
+            orig_cell.number_format = config.price_number_format
 
         # Color-code discount/on-sale
         discount_pct = r.get("discount_pct", 0)
