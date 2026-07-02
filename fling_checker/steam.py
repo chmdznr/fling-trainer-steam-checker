@@ -152,7 +152,10 @@ def get_steam_app_details(appid: int, config: Config) -> dict | None:
     if resp is None:
         return None
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
     app_data = data.get(str(appid), {})
     if not app_data.get("success"):
         return None
@@ -168,7 +171,7 @@ def get_steam_deck_compat(appid: int, config: Config) -> str:
 
     try:
         data = resp.json()
-    except json.JSONDecodeError:
+    except ValueError:
         return "Unknown"
 
     # Steam Deck API returns resolved_category at top level of "results"
@@ -198,7 +201,7 @@ def get_steam_reviews(appid: int, config: Config) -> dict:
 
     try:
         data = resp.json()
-    except json.JSONDecodeError:
+    except ValueError:
         return {"total_reviews": 0, "positive_pct": 0, "review_desc": "Not Found"}
 
     summary = data.get("query_summary", {})

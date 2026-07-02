@@ -20,6 +20,7 @@ def load_cache(config) -> dict:
 
 def save_cache(cache: dict, config):
     """Save cache to JSON file."""
+    config.cache_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config.cache_path, "w") as f:
         json.dump(cache, f, indent=2, default=str)
     print(f"  Cache saved: {len(cache)} entries to {config.cache_path.name}")

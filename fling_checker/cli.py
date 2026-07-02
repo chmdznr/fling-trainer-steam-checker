@@ -10,6 +10,17 @@ from fling_checker.processor import process_new_trainers, refresh_prices
 from fling_checker.excel import write_excel
 
 
+def _positive_int(value: str) -> int:
+    """Parse a CLI integer that must be greater than zero."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
 def parse_args() -> Config:
     """Parse command-line arguments and return a Config object."""
     parser = argparse.ArgumentParser(
@@ -33,11 +44,11 @@ Supported country codes for pricing:
                         help="Minimum trainer year (default: 2024)")
     parser.add_argument("--country", type=str, default="ID",
                         help="Steam store country code for pricing (default: ID)")
-    parser.add_argument("--workers", type=int, default=4,
+    parser.add_argument("--workers", type=_positive_int, default=4,
                         help="Number of concurrent threads (default: 4)")
     parser.add_argument("--delay", type=float, default=1.5,
                         help="Seconds between Steam API requests per game (default: 1.5)")
-    parser.add_argument("--retries", type=int, default=3,
+    parser.add_argument("--retries", type=_positive_int, default=3,
                         help="Max retry attempts for Steam API errors (default: 3)")
     parser.add_argument("--ttl-hours", type=int, default=24,
                         help="Skip price refresh if cached within N hours (default: 24)")
@@ -86,7 +97,7 @@ def main():
     print(f"\n📦 Loading cache...")
     cache = load_cache(config)
 
-    # Step 1: Scrape FLiNG (incremental — stops at cached entries)
+    # Step 1: Scrape FLiNG until the year boundary or the site runs out of pages
     print(f"\n📋 Step 1: Scraping FLiNG Trainer (year >= {config.min_year})...")
     new_trainers, cached_results = scrape_fling_trainers(cache, config)
 

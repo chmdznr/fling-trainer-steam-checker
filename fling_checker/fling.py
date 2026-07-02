@@ -12,7 +12,8 @@ from fling_checker.config import print, FLING_BASE_URL, FLING_FIRST_PAGE
 def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
     """
     Scrape FLiNG Trainer category pages for trainers from min_year onwards.
-    Stops when it hits a trainer_url already in cache.
+    Reuses cached entries, and stops only at the configured year boundary or
+    when the site has no more trainer articles.
 
     Returns:
         (new_trainers, cached_results) — trainers not yet in cache, plus
@@ -137,7 +138,6 @@ def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
             if trainer_url in cached_urls:
                 # Already cached — grab existing data
                 cached_results.append(cache[trainer_url])
-                stop_scraping = True  # incremental: stop at first cached entry
                 continue
 
             new_trainers.append(trainer_entry)

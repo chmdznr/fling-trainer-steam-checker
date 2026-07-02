@@ -18,6 +18,23 @@ from fling_checker.steam import (
 import time
 
 
+def _failed_trainer_result(trainer: dict, config: Config, error: Exception) -> dict:
+    """Return a workbook/cache row for a trainer that failed in a worker."""
+    tqdm.write(f"  ⚠ {trainer.get('game_name', 'Unknown')} — failed: {error}")
+    return {
+        **trainer,
+        "steam_appid": None, "steam_name": None, "steam_url": None,
+        "deck_compat": "Unknown",
+        "price": "N/A", "price_idr": None, "original_price_idr": None,
+        "discount_pct": 0, "on_sale": False,
+        "total_reviews": 0, "positive_pct": 0, "review_desc": "Error",
+        "genres": "",
+        "last_fetched": datetime.now().isoformat(),
+        "_price_updated_at": None,
+        "_country_code": config.country_code,
+    }
+
+
 def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
     """Process a single new trainer: full Steam lookup (search + deck + details + reviews)."""
     game_name = trainer["game_name"]
@@ -97,7 +114,11 @@ def process_new_trainers(trainers: list[dict], config: Config) -> list[dict]:
                 for t in trainers
             }
             for future in as_completed(futures):
-                result = future.result()
+                trainer = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = _failed_trainer_result(trainer, config, exc)
                 results.append(result)
                 pbar.update(1)
 
@@ -162,7 +183,12 @@ def refresh_prices(cached_results: list[dict], config: Config) -> list[dict]:
                 for r in has_appid
             }
             for future in as_completed(futures):
-                result = future.result()
+                cached_entry = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    tqdm.write(f"  ⚠ {cached_entry.get('game_name', 'Unknown')} — price refresh failed: {exc}")
+                    result = cached_entry
                 refreshed.append(result)
                 pbar.update(1)
 

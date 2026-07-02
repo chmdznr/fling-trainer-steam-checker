@@ -92,6 +92,7 @@ class Config:
     def __post_init__(self):
         if self.output_dir is None:
             self.output_dir = Path.cwd()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.currency = CURRENCY_MAP.get(self.country_code, DEFAULT_CURRENCY)
         self.cache_path = self.output_dir / "fling_steam_cache.json"
         self.overrides_path = self.output_dir / "fling_steam_overrides.json"
