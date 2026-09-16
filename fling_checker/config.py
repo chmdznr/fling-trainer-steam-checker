@@ -1,6 +1,8 @@
 """Configuration, constants, and shared utilities."""
 
 import argparse
+import json
+import threading
 import requests
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,6 +90,8 @@ class Config:
     # derived:
     currency: dict = field(default_factory=dict)
     overrides: dict = field(default_factory=dict)
+    session: requests.Session | None = None
+    cancel_event: threading.Event | None = None
 
     def __post_init__(self):
         if self.output_dir is None:
@@ -101,13 +105,22 @@ class Config:
     def _load_overrides(self):
         if self.overrides_path.exists():
             try:
-                import json
                 with open(self.overrides_path, "r") as f:
                     self.overrides = json.load(f)
                 if self.verbose:
                     print(f"    Loaded {len(self.overrides)} AppID overrides from {self.overrides_path}")
             except Exception as e:
                 print(f"  ⚠ Warning: Failed to load overrides file: {e}")
+
+    def save_overrides(self):
+        """Persist current overrides dict to the overrides JSON file."""
+        self.overrides_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.overrides_path, "w") as f:
+            json.dump(self.overrides, f, indent=2, default=str)
+
+    def reload_overrides(self):
+        """Reload overrides from disk."""
+        self._load_overrides()
 
     @property
     def currency_code(self) -> str:
@@ -139,3 +152,16 @@ def build_session() -> requests.Session:
         "Accept-Language": "en-US,en;q=0.9",
     })
     return session
+
+
+def ensure_session(config) -> requests.Session:
+    """Attach a shared requests session to the config if missing."""
+    if config.session is None:
+        config.session = build_session()
+    return config.session
+
+
+def is_cancelled(config) -> bool:
+    """Check the cooperative cancellation flag on the config."""
+    event = getattr(config, "cancel_event", None)
+    return bool(event is not None and event.is_set())

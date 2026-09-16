@@ -52,6 +52,9 @@ python fling_steam_checker.py --no-cache
 
 # Show all options
 python fling_steam_checker.py --help
+
+# Launch the interactive TUI (config form, live progress, results table)
+python fling_steam_checker.py --tui
 ```
 
 ## CLI Options
@@ -67,6 +70,13 @@ python fling_steam_checker.py --help
 | `--output-dir` | current dir | Output directory for Excel and cache files |
 | `--no-cache` | off | Ignore cache, fetch all data fresh |
 | `--verbose` | off | Show debug-level output |
+| `--tui` | off | Launch the interactive Textual TUI (config → run → results) |
+
+The TUI reuses the same pipeline as the CLI: a config form (defaults come from
+CLI flags), live progress bars + log, then a sortable/filterable results table
+with per-game detail (`d`/`enter`), single-row retry (`r`), AppID overrides
+editor (`o`), and Excel re-export (`e`). Cancel (`Cancel` button) stops cleanly
+between items and shows partial results.
 
 ### Supported Country Codes
 

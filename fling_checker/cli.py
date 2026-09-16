@@ -3,11 +3,8 @@
 import argparse
 from pathlib import Path
 
-from fling_checker.config import Config, CURRENCY_MAP, build_session, print
-from fling_checker.cache import load_cache, save_cache
-from fling_checker.fling import scrape_fling_trainers
-from fling_checker.processor import process_new_trainers, refresh_prices
-from fling_checker.excel import write_excel
+from fling_checker.config import Config, CURRENCY_MAP, ensure_session, print
+from fling_checker.pipeline import run_pipeline
 
 
 def _positive_int(value: str) -> int:
@@ -58,6 +55,8 @@ Supported country codes for pricing:
                         help="Ignore cache, fetch all data fresh")
     parser.add_argument("--verbose", action="store_true",
                         help="Show verbose/debug output")
+    parser.add_argument("--tui", action="store_true",
+                        help="Launch the interactive Textual TUI instead of CLI mode")
 
     args = parser.parse_args()
 
@@ -74,17 +73,22 @@ Supported country codes for pricing:
     )
 
     # Attach session
-    config.session = build_session()
+    config.session = ensure_session(config)
 
     if config.country_code not in CURRENCY_MAP:
         print(f"⚠ Warning: Country code '{config.country_code}' not in CURRENCY_MAP.")
         print(f"  Prices will use Steam's raw format. Supported: {', '.join(sorted(CURRENCY_MAP.keys()))}")
 
-    return config
+    return config, args.tui
 
 
 def main():
-    config = parse_args()
+    config, use_tui = parse_args()
+
+    if use_tui:
+        from fling_checker.tui import run_tui
+        run_tui(config)
+        return
 
     print("=" * 60)
     print("FLiNG Trainer + Steam Deck Compatibility Checker")
@@ -93,64 +97,16 @@ def main():
     print(f"  Workers: {config.max_workers} | Delay: {config.request_delay}s")
     print(f"  Min year: {config.min_year} | Cache TTL: {config.cache_price_ttl_hours}h")
 
-    # Load cache
-    print(f"\n📦 Loading cache...")
-    cache = load_cache(config)
-
-    # Step 1: Scrape FLiNG until the year boundary or the site runs out of pages
-    print(f"\n📋 Step 1: Scraping FLiNG Trainer (year >= {config.min_year})...")
-    new_trainers, cached_results = scrape_fling_trainers(cache, config)
-
-    # Step 2a: Full Steam lookup for NEW trainers only
-    new_results = []
-    if new_trainers:
-        print(f"\n🎮 Step 2a: Looking up {len(new_trainers)} NEW games on Steam...")
-        new_results = process_new_trainers(new_trainers, config)
-    else:
-        print(f"\n🎮 Step 2a: No new games to look up!")
-
-    # Step 2b: Refresh prices for cached entries
-    refreshed_cached = []
-    # Refresh all cached entries that have a Steam ID, not just those found during scraping
-    cached_with_ids = [r for r in cache.values() if r.get("steam_appid")]
-    if cached_with_ids:
-        refreshed_cached = refresh_prices(cached_with_ids, config)
-    else:
-        print(f"\n💲 Step 2b: No cached entries to refresh.")
-
-    # Merge results
-    # Start with everything currently in the cache
-    all_results = list(cache.values())
-
-    # Update with newly fetched results and refreshed cached entries
-    for r in new_results + refreshed_cached:
-        all_results = [item for item in all_results if item["trainer_url"] != r["trainer_url"]]
-        all_results.append(r)
-
-
-    # Update cache
-    if all_results:
-        print(f"\n💾 Updating cache...")
-        for r in all_results:
-            cache[r["trainer_url"]] = r
-        save_cache(cache, config)
-    else:
-        print(f"\n💾 No new data to update cache.")
-
-    # Step 3: Write Excel
-    timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M")
-    output_path = config.output_dir / f"fling_steam_deck_{timestamp}.xlsx"
-    print(f"\n📊 Step 3: Writing Excel...")
-    write_excel(all_results, output_path, config)
+    result = run_pipeline(config)
 
     # Summary
-    deck_ok = [r for r in all_results if r.get("deck_compat") in ("Verified", "Playable")]
-    on_sale = [r for r in all_results if r.get("on_sale") and r.get("deck_compat") in ("Verified", "Playable")]
+    deck_ok = [r for r in result.all_results if r.get("deck_compat") in ("Verified", "Playable")]
+    on_sale = [r for r in result.all_results if r.get("on_sale") and r.get("deck_compat") in ("Verified", "Playable")]
 
     print(f"\n{'=' * 60}")
-    print(f"  Done! {len(all_results)} games processed")
-    print(f"  New (fetched):         {len(new_results)}")
-    print(f"  Cached (refreshed):    {len(refreshed_cached)}")
+    print(f"  Done! {len(result.all_results)} games processed")
+    print(f"  New (fetched):         {len(result.new_results)}")
+    print(f"  Cached (refreshed):    {len(result.refreshed)}")
     print(f"  Deck Compatible:       {len(deck_ok)} (Verified + Playable)")
     print(f"  On Sale (Deck OK):     {len(on_sale)}")
     print(f"{'=' * 60}")

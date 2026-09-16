@@ -14,7 +14,19 @@ from fling_checker.config import (
 )
 
 
-def steam_request(url: str, params: dict, config: Config, timeout: int = 10) -> requests.Response | None:
+def _emit(msg: str, config: Config, reporter=None, verbose_only: bool = False) -> None:
+    """Route a status message to the reporter, tqdm, or print."""
+    if verbose_only and not config.verbose:
+        return
+    if reporter is not None:
+        reporter.log(msg)
+    elif verbose_only:
+        print(msg)
+    else:
+        tqdm.write(msg)
+
+
+def steam_request(url: str, params: dict, config: Config, timeout: int = 10, reporter=None) -> requests.Response | None:
     """Make a Steam API request with exponential backoff retry.
 
     Retries on transient errors (ConnectionError, Timeout, 5xx).
@@ -27,19 +39,18 @@ def steam_request(url: str, params: dict, config: Config, timeout: int = 10) -> 
             return resp
         except (requests.ConnectionError, requests.Timeout) as e:
             wait = 2 ** (attempt + 1)
-            if config.verbose:
-                print(f"    Retry {attempt + 1}/{config.max_retries} — {type(e).__name__}, waiting {wait}s...")
+            _emit(f"    Retry {attempt + 1}/{config.max_retries} — {type(e).__name__}, waiting {wait}s...",
+                  config, reporter, verbose_only=True)
             time.sleep(wait)
         except requests.HTTPError as e:
             status_code = e.response.status_code if e.response else 0
             if 400 <= status_code < 500:
                 # Client error — don't retry
-                if config.verbose:
-                    print(f"    HTTP {status_code} — not retrying")
+                _emit(f"    HTTP {status_code} — not retrying", config, reporter, verbose_only=True)
                 return None
             wait = 2 ** (attempt + 1)
-            if config.verbose:
-                print(f"    Retry {attempt + 1}/{config.max_retries} — HTTP {status_code}, waiting {wait}s...")
+            _emit(f"    Retry {attempt + 1}/{config.max_retries} — HTTP {status_code}, waiting {wait}s...",
+                  config, reporter, verbose_only=True)
             time.sleep(wait)
     return None
 
@@ -57,22 +68,22 @@ def _clean_game_name(game_name: str) -> str:
     return name.strip()
 
 
-def search_steam_appid(game_name: str, config: Config, trainer_slug: str = None) -> dict | None:
+def search_steam_appid(game_name: str, config: Config, trainer_slug: str = None, reporter=None) -> dict | None:
     """Search Steam Store for a game by name using multiple strategies."""
     search_name = _clean_game_name(game_name)
-    
+
     # Strategy 0: Manual Overrides from JSON file
     # Check by full search_name or trainer_slug
     if search_name in config.overrides:
         appid = config.overrides[search_name]
         if config.verbose:
-            tqdm.write(f"    [Override] Found '{search_name}' in overrides -> AppID {appid}")
+            _emit(f"    [Override] Found '{search_name}' in overrides -> AppID {appid}", config, reporter)
         return {"appid": int(appid), "name": search_name}
-    
+
     if trainer_slug and trainer_slug in config.overrides:
         appid = config.overrides[trainer_slug]
         if config.verbose:
-            tqdm.write(f"    [Override] Found slug '{trainer_slug}' in overrides -> AppID {appid}")
+            _emit(f"    [Override] Found slug '{trainer_slug}' in overrides -> AppID {appid}", config, reporter)
         return {"appid": int(appid), "name": search_name}
 
     def normalize(n: str) -> str:
@@ -94,7 +105,7 @@ def search_steam_appid(game_name: str, config: Config, trainer_slug: str = None)
     suggest_url = "https://store.steampowered.com/search/suggest"
     for term in search_terms:
         suggest_params = {"term": term, "f": "games", "cc": config.country_code, "l": "english"}
-        resp = steam_request(suggest_url, params=suggest_params, config=config)
+        resp = steam_request(suggest_url, params=suggest_params, config=config, reporter=reporter)
         time.sleep(0.5) # Polite delay
         if resp and resp.text:
             matches = re.findall(r'data-ds-appid="(\d+)".*?<div class="match_name">([^<]+)</div>', resp.text, re.DOTALL)
@@ -113,7 +124,7 @@ def search_steam_appid(game_name: str, config: Config, trainer_slug: str = None)
     
     for strategy in search_strategies:
         params = {**strategy, "l": "english"}
-        resp = steam_request(STEAM_SEARCH_URL, params=params, config=config)
+        resp = steam_request(STEAM_SEARCH_URL, params=params, config=config, reporter=reporter)
         time.sleep(0.5) # Polite delay
         if not resp:
             continue
@@ -131,7 +142,7 @@ def search_steam_appid(game_name: str, config: Config, trainer_slug: str = None)
     for word in words[:2]:
         if len(word) < 4: continue
         params = {"term": word, "cc": config.country_code, "l": "english"}
-        resp = steam_request(STEAM_SEARCH_URL, params=params, config=config)
+        resp = steam_request(STEAM_SEARCH_URL, params=params, config=config, reporter=reporter)
         time.sleep(0.5) # Polite delay
         if resp:
             try:
@@ -145,10 +156,10 @@ def search_steam_appid(game_name: str, config: Config, trainer_slug: str = None)
     return None
 
 
-def get_steam_app_details(appid: int, config: Config) -> dict | None:
+def get_steam_app_details(appid: int, config: Config, reporter=None) -> dict | None:
     """Get app details from Steam Store API."""
     params = {"appids": appid, "cc": config.country_code, "l": "english"}
-    resp = steam_request(STEAM_APPDETAILS_URL, params=params, config=config)
+    resp = steam_request(STEAM_APPDETAILS_URL, params=params, config=config, reporter=reporter)
     if resp is None:
         return None
 
@@ -162,10 +173,10 @@ def get_steam_app_details(appid: int, config: Config) -> dict | None:
     return app_data.get("data")
 
 
-def get_steam_deck_compat(appid: int, config: Config) -> str:
+def get_steam_deck_compat(appid: int, config: Config, reporter=None) -> str:
     """Check Steam Deck compatibility for an app."""
     params = {"nAppID": appid}
-    resp = steam_request(STEAM_DECK_URL, params=params, config=config)
+    resp = steam_request(STEAM_DECK_URL, params=params, config=config, reporter=reporter)
     if resp is None:
         return "Unknown"
 
@@ -185,7 +196,7 @@ def get_steam_deck_compat(appid: int, config: Config) -> str:
     return DECK_COMPAT_MAP.get(resolved_category, "Unknown")
 
 
-def get_steam_reviews(appid: int, config: Config) -> dict:
+def get_steam_reviews(appid: int, config: Config, reporter=None) -> dict:
     """Get review summary for an app."""
     url = STEAM_REVIEWS_URL.format(appid=appid)
     params = {
@@ -195,7 +206,7 @@ def get_steam_reviews(appid: int, config: Config) -> dict:
         "num_per_page": 0,
         "review_type": "all",
     }
-    resp = steam_request(url, params=params, config=config)
+    resp = steam_request(url, params=params, config=config, reporter=reporter)
     if resp is None:
         return {"total_reviews": 0, "positive_pct": 0, "review_desc": "Not Found"}
 

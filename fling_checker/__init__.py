@@ -5,9 +5,11 @@ from fling_checker.config import (
     FLING_BASE_URL, FLING_FIRST_PAGE,
     STEAM_SEARCH_URL, STEAM_APPDETAILS_URL,
     STEAM_REVIEWS_URL, STEAM_DECK_URL,
-    DECK_COMPAT_MAP, build_session,
+    DECK_COMPAT_MAP, build_session, ensure_session, is_cancelled,
 )
 from fling_checker.cache import load_cache, save_cache
+from fling_checker.reporter import NullReporter, CliReporter, Reporter
+from fling_checker.pipeline import PipelineResult, run_pipeline
 from fling_checker.fling import scrape_fling_trainers
 from fling_checker.steam import (
     steam_request, search_steam_appid,
@@ -26,8 +28,10 @@ __all__ = [
     "FLING_BASE_URL", "FLING_FIRST_PAGE",
     "STEAM_SEARCH_URL", "STEAM_APPDETAILS_URL",
     "STEAM_REVIEWS_URL", "STEAM_DECK_URL",
-    "DECK_COMPAT_MAP", "build_session",
+    "DECK_COMPAT_MAP", "build_session", "ensure_session", "is_cancelled",
     "load_cache", "save_cache",
+    "NullReporter", "CliReporter", "Reporter",
+    "PipelineResult", "run_pipeline",
     "scrape_fling_trainers",
     "steam_request", "search_steam_appid",
     "get_steam_app_details", "get_steam_deck_compat",

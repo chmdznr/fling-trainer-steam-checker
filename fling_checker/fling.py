@@ -6,10 +6,11 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from fling_checker.config import print, FLING_BASE_URL, FLING_FIRST_PAGE
+from fling_checker.config import is_cancelled, FLING_BASE_URL, FLING_FIRST_PAGE
+from fling_checker.reporter import say
 
 
-def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
+def scrape_fling_trainers(cache: dict, config, reporter=None) -> tuple[list[dict], list[dict]]:
     """
     Scrape FLiNG Trainer category pages for trainers from min_year onwards.
     Reuses cached entries, and stops only at the configured year boundary or
@@ -25,11 +26,19 @@ def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
     page = 1
     stop_scraping = False
 
-    pbar = tqdm(desc="Scraping FLiNG", unit="page")
+    if reporter is not None:
+        pbar = None
+    else:
+        pbar = tqdm(desc="Scraping FLiNG", unit="page")
 
     while not stop_scraping:
+        if is_cancelled(config) or (reporter is not None and reporter.is_cancelled()):
+            break
         url = FLING_FIRST_PAGE if page == 1 else FLING_BASE_URL.format(page=page)
-        pbar.set_postfix_str(f"page {page}")
+        if pbar is not None:
+            pbar.set_postfix_str(f"page {page}")
+        elif reporter is not None:
+            reporter.progress("Scraping FLiNG", page, None)
         resp = config.session.get(url, timeout=15)
         if resp.status_code != 200:
             break
@@ -142,11 +151,15 @@ def scrape_fling_trainers(cache: dict, config) -> tuple[list[dict], list[dict]]:
 
             new_trainers.append(trainer_entry)
 
-        pbar.update(1)
+        if pbar is not None:
+            pbar.update(1)
+        elif reporter is not None:
+            reporter.progress("Scraping FLiNG", page, None)
         page += 1
 
-    pbar.close()
+    if pbar is not None:
+        pbar.close()
 
     total = len(new_trainers) + len(cached_results)
-    print(f"  Found {total} trainers ({len(new_trainers)} new, {len(cached_results)} cached)")
+    say(reporter, f"  Found {total} trainers ({len(new_trainers)} new, {len(cached_results)} cached)")
     return new_trainers, cached_results

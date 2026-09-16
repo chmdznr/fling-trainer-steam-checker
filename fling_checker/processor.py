@@ -1,11 +1,13 @@
 """Orchestration: process new trainers and refresh cached prices."""
 
+from contextlib import nullcontext as _nullcontext
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tqdm import tqdm
 
-from fling_checker.config import print, Config
+from fling_checker.config import is_cancelled, print, Config
+from fling_checker.reporter import Reporter, say
 from fling_checker.steam import (
     _clean_game_name,
     search_steam_appid,
@@ -18,9 +20,13 @@ from fling_checker.steam import (
 import time
 
 
-def _failed_trainer_result(trainer: dict, config: Config, error: Exception) -> dict:
+def _failed_trainer_result(trainer: dict, config: Config, error: Exception, reporter: Reporter | None = None) -> dict:
     """Return a workbook/cache row for a trainer that failed in a worker."""
-    tqdm.write(f"  ⚠ {trainer.get('game_name', 'Unknown')} — failed: {error}")
+    msg = f"  ⚠ {trainer.get('game_name', 'Unknown')} — failed: {error}"
+    if reporter is not None:
+        reporter.log(msg)
+    else:
+        tqdm.write(msg)
     return {
         **trainer,
         "steam_appid": None, "steam_name": None, "steam_url": None,
@@ -35,21 +41,27 @@ def _failed_trainer_result(trainer: dict, config: Config, error: Exception) -> d
     }
 
 
-def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
+def _process_single_new_trainer(trainer: dict, config: Config, reporter: Reporter | None = None) -> dict:
     """Process a single new trainer: full Steam lookup (search + deck + details + reviews)."""
     game_name = trainer["game_name"]
     trainer_slug = trainer.get("trainer_slug")
     now = datetime.now().isoformat()
 
-    steam_match = search_steam_appid(game_name, config, trainer_slug=trainer_slug)
+    def _emit(msg: str):
+        if reporter is not None:
+            reporter.log(msg)
+        else:
+            tqdm.write(msg)
+
+    steam_match = search_steam_appid(game_name, config, trainer_slug=trainer_slug, reporter=reporter)
     time.sleep(config.request_delay)
 
     if not steam_match:
         search_name = _clean_game_name(game_name)
         if config.verbose and search_name != game_name:
-            tqdm.write(f"  ⚠ {game_name} (searched: {search_name}) — not found on Steam")
+            _emit(f"  ⚠ {game_name} (searched: {search_name}) — not found on Steam")
         else:
-            tqdm.write(f"  ⚠ {game_name} — not found on Steam")
+            _emit(f"  ⚠ {game_name} — not found on Steam")
         return {
             **trainer,
             "steam_appid": None, "steam_name": None, "steam_url": None,
@@ -65,23 +77,23 @@ def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
 
     appid = steam_match["appid"]
     steam_name = steam_match["name"]
-    tqdm.write(f"  ✓ {game_name} → {steam_name} (ID: {appid})")
+    _emit(f"  ✓ {game_name} → {steam_name} (ID: {appid})")
 
-    deck_compat = get_steam_deck_compat(appid, config)
+    deck_compat = get_steam_deck_compat(appid, config, reporter=reporter)
     time.sleep(config.request_delay)
 
-    app_details = get_steam_app_details(appid, config)
+    app_details = get_steam_app_details(appid, config, reporter=reporter)
     time.sleep(config.request_delay)
     price_info = extract_price_info(app_details, config) if app_details else {
         "price": "N/A", "price_idr": None, "original_price_idr": None,
         "discount_pct": 0, "on_sale": False,
     }
 
-    reviews = get_steam_reviews(appid, config)
+    reviews = get_steam_reviews(appid, config, reporter=reporter)
     time.sleep(config.request_delay)
 
     if price_info.get("on_sale"):
-        tqdm.write(f"  💰 ON SALE: {game_name} — {price_info['price']} (-{price_info['discount_pct']}%)")
+        _emit(f"  💰 ON SALE: {game_name} — {price_info['price']} (-{price_info['discount_pct']}%)")
 
     # Extract genres from app_details
     genres = extract_genres(app_details) if app_details else ""
@@ -99,28 +111,53 @@ def _process_single_new_trainer(trainer: dict, config: Config) -> dict:
     }
 
 
-def process_new_trainers(trainers: list[dict], config: Config) -> list[dict]:
+def process_new_trainers(trainers: list[dict], config: Config, reporter: Reporter | None = None) -> list[dict]:
     """For each NEW trainer, do full Steam lookup concurrently."""
     if not trainers:
         return []
 
+    cancelled = lambda: is_cancelled(config) or (reporter is not None and reporter.is_cancelled())
+
     results = []
     total = len(trainers)
 
-    with tqdm(total=total, desc="New games", unit="game") as pbar:
+    if reporter is not None:
+        pbar = None
+    else:
+        from tqdm import tqdm as _tqdm
+        pbar = _tqdm(total=total, desc="New games", unit="game")
+
+    def _bump(done: int):
+        if pbar is not None:
+            pbar.update(1)
+        elif reporter is not None:
+            reporter.progress("New games", done, total)
+
+    with pbar if pbar is not None else _nullcontext():
         with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
             futures = {
-                executor.submit(_process_single_new_trainer, t, config): t
+                executor.submit(_process_single_new_trainer, t, config, reporter): t
                 for t in trainers
             }
+            done = 0
             for future in as_completed(futures):
                 trainer = futures[future]
                 try:
                     result = future.result()
                 except Exception as exc:
-                    result = _failed_trainer_result(trainer, config, exc)
+                    result = _failed_trainer_result(trainer, config, exc, reporter=reporter)
                 results.append(result)
-                pbar.update(1)
+                if reporter is not None:
+                    reporter.item(result)
+                done += 1
+                _bump(done)
+                if cancelled():
+                    for f in futures:
+                        f.cancel()
+                    break
+
+    if pbar is not None:
+        pbar.close()
 
     return results
 
@@ -164,7 +201,7 @@ def _refresh_single_price(cached_entry: dict, config: Config) -> dict:
     return cached_entry
 
 
-def refresh_prices(cached_results: list[dict], config: Config) -> list[dict]:
+def refresh_prices(cached_results: list[dict], config: Config, reporter: Reporter | None = None) -> list[dict]:
     """Refresh prices for cached entries that have Steam IDs."""
     has_appid = [r for r in cached_results if r.get("steam_appid")]
     no_appid = [r for r in cached_results if not r.get("steam_appid")]
@@ -172,24 +209,55 @@ def refresh_prices(cached_results: list[dict], config: Config) -> list[dict]:
     if not has_appid:
         return no_appid
 
-    print(f"\n💲 Step 2b: Refreshing prices for {len(has_appid)} cached games...")
+    cancelled = lambda: is_cancelled(config) or (reporter is not None and reporter.is_cancelled())
+
+    say(reporter, f"\n💲 Step 2b: Refreshing prices for {len(has_appid)} cached games...")
     refreshed = []
     total = len(has_appid)
 
-    with tqdm(total=total, desc="Price refresh", unit="game") as pbar:
+    if reporter is not None:
+        pbar = None
+    else:
+        from tqdm import tqdm as _tqdm
+        pbar = _tqdm(total=total, desc="Price refresh", unit="game")
+
+    def _bump(done: int):
+        if pbar is not None:
+            pbar.update(1)
+        elif reporter is not None:
+            reporter.progress("Price refresh", done, total)
+
+    def _emit(msg: str):
+        if reporter is not None:
+            reporter.log(msg)
+        else:
+            tqdm.write(msg)
+
+    with pbar if pbar is not None else _nullcontext():
         with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
             futures = {
                 executor.submit(_refresh_single_price, r, config): r
                 for r in has_appid
             }
+            done = 0
             for future in as_completed(futures):
                 cached_entry = futures[future]
                 try:
                     result = future.result()
                 except Exception as exc:
-                    tqdm.write(f"  ⚠ {cached_entry.get('game_name', 'Unknown')} — price refresh failed: {exc}")
+                    _emit(f"  ⚠ {cached_entry.get('game_name', 'Unknown')} — price refresh failed: {exc}")
                     result = cached_entry
                 refreshed.append(result)
-                pbar.update(1)
+                if reporter is not None:
+                    reporter.item(result)
+                done += 1
+                _bump(done)
+                if cancelled():
+                    for f in futures:
+                        f.cancel()
+                    break
+
+    if pbar is not None:
+        pbar.close()
 
     return refreshed + no_appid
