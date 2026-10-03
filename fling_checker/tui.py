@@ -25,10 +25,10 @@ from textual.widgets import (
     Select,
 )
 
-from fling_checker.cache import save_cache
+from fling_checker.cache import load_cache, save_cache
 from fling_checker.config import CURRENCY_MAP, Config, ensure_session
 from fling_checker.excel import write_excel
-from fling_checker.pipeline import run_pipeline
+from fling_checker.pipeline import PipelineResult, run_pipeline
 from fling_checker.processor import _process_single_new_trainer
 from fling_checker.reporter import Reporter
 
@@ -157,6 +157,21 @@ def sort_key_for_column(col: int):
 def sort_results(results: list[dict], col: int, reverse: bool) -> list[dict]:
     """Return a new list sorted by the given column index."""
     return sorted(results, key=sort_key_for_column(col), reverse=reverse)
+
+
+def cached_rows(cache: dict) -> list[dict]:
+    """Rows for browsing a saved cache without scanning, grouped by Deck status.
+
+    Column 4 is the Deck column, so this mirrors the workbook's Verified-first
+    ordering; entries missing ``deck_compat`` sort as Unknown.
+    """
+    return sort_results(list(cache.values()), 4, False)
+
+
+def cache_price_as_of(rows: list[dict]) -> str:
+    """Newest price-refresh date among rows as YYYY-MM-DD, or "" if unknown."""
+    dates = [str(r.get("_price_updated_at") or "")[:10] for r in rows]
+    return max((d for d in dates if d), default="")
 
 
 def trainer_date_display(r: dict) -> str:
@@ -420,6 +435,7 @@ class ConfigScreen(Screen):
             yield Label("", id="cfg-error")
             with Horizontal(id="config-actions"):
                 yield Button("Start Scan", id="cfg-start", variant="primary")
+                yield Button("Browse Cache", id="cfg-cache")
                 yield Button("Quit", id="cfg-quit")
         yield Footer()
 
@@ -479,6 +495,25 @@ class ConfigScreen(Screen):
         if config is None:
             return
         self.app.push_screen(RunScreen(config))
+
+    @on(Button.Pressed, "#cfg-cache")
+    def browse_cache(self) -> None:
+        """Open the results table from the saved cache, without any network call."""
+        config = self._read_config()
+        if config is None:
+            return
+        if config.no_cache:
+            self.query_one("#cfg-error", Label).update(
+                "Ignore cache is enabled — uncheck it to browse cached results."
+            )
+            return
+        rows = cached_rows(load_cache(config))
+        if not rows:
+            self.query_one("#cfg-error", Label).update(f"No cached results in {config.cache_path}.")
+            return
+        self.app.push_screen(
+            ResultsScreen(config, PipelineResult(all_results=rows), offline=True)
+        )
 
     @on(Button.Pressed, "#cfg-quit")
     def quit_app(self) -> None:
@@ -604,12 +639,14 @@ class ResultsScreen(Screen):
     ]
     AUTO_FOCUS = "#results-table"
 
-    def __init__(self, config: Config, result) -> None:
+    def __init__(self, config: Config, result, offline: bool = False) -> None:
         super().__init__()
         self.config = config
         self.result = result
+        self.offline = offline
         self.all_results: list[dict] = list(result.all_results)
         self.shown: list[dict] = list(self.all_results)
+        self.prices_as_of = cache_price_as_of(self.all_results) if offline else ""
         self.deck_filter = "All"
         self.search_text = ""
         self.on_sale_only = False
@@ -657,10 +694,13 @@ class ResultsScreen(Screen):
         verified = sum(1 for r in self.all_results if r.get("deck_compat") == "Verified")
         playable = sum(1 for r in self.all_results if r.get("deck_compat") == "Playable")
         on_sale = sum(1 for r in self.all_results if r.get("on_sale") and r.get("deck_compat") in ("Verified", "Playable"))
-        new = len(self.result.new_results)
+        if self.offline:
+            source = f"Source: cache, prices as of {self.prices_as_of or 'unknown'}"
+        else:
+            source = f"New: {len(self.result.new_results)}"
         self.query_one("#results-stats", Label).update(
-            f"Total: {total} | Verified: {verified} | Playable: {playable} | "
-            f"On Sale (Deck OK): {on_sale} | New: {new} | Showing: {len(self.shown)}"
+            f"{source} | Total: {total} | Verified: {verified} | Playable: {playable} | "
+            f"On Sale (Deck OK): {on_sale} | Showing: {len(self.shown)}"
         )
 
     def _reload_table(self) -> None:

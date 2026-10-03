@@ -4,11 +4,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fling_checker.config import Config
+from fling_checker.cache import load_cache, save_cache
 from fling_checker.fling import scrape_fling_trainers
 from fling_checker.pipeline import run_pipeline
 from fling_checker.processor import process_new_trainers, refresh_prices
 from fling_checker.reporter import NullReporter, Reporter, say
 from fling_checker.tui import (
+    cache_price_as_of,
+    cached_rows,
     detail_lines,
     filter_results,
     format_row,
@@ -300,6 +303,43 @@ class TuiHelperTests(unittest.TestCase):
         ]
         ordered = [r["game_name"] for r in sort_results(rows, 4, False)]
         self.assertEqual(ordered, ["V", "P", "U"])
+
+    def test_cached_rows_groups_by_deck_and_tolerates_missing_fields(self):
+        cache = {
+            "https://x/u": {"trainer_url": "https://x/u", "game_name": "U"},
+            "https://x/p": sample_result(game_name="P", trainer_url="https://x/p", deck_compat="Playable"),
+            "https://x/v": sample_result(game_name="V", trainer_url="https://x/v", deck_compat="Verified"),
+        }
+        self.assertEqual([r["game_name"] for r in cached_rows(cache)], ["V", "P", "U"])
+        self.assertEqual(cached_rows({}), [])
+
+    def test_cache_price_as_of_uses_newest_date(self):
+        rows = [
+            sample_result(_price_updated_at="2026-09-16T16:50:01"),
+            sample_result(trainer_url="https://x/b", _price_updated_at="2026-10-03T18:49:13"),
+            sample_result(trainer_url="https://x/c", _price_updated_at=None),
+            sample_result(trainer_url="https://x/d"),
+        ]
+        self.assertEqual(cache_price_as_of(rows), "2026-10-03")
+        self.assertEqual(cache_price_as_of([]), "")
+        self.assertEqual(cache_price_as_of([sample_result(trainer_url="https://x/c", _price_updated_at=None)]), "")
+
+    def test_cached_rows_from_saved_cache_without_scraping(self):
+        """Browsing the cache reads only the JSON file — no session is ever used."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Config(output_dir=Path(tmp))
+            config.session = None
+            save_cache(
+                {
+                    "https://x/u": sample_result(game_name="U", trainer_url="https://x/u", deck_compat="Unknown"),
+                    "https://x/v": sample_result(game_name="V", trainer_url="https://x/v", deck_compat="Verified"),
+                },
+                config,
+            )
+            with patch("fling_checker.fling.scrape_fling_trainers") as scrape:
+                rows = cached_rows(load_cache(config))
+            scrape.assert_not_called()
+            self.assertEqual([r["game_name"] for r in rows], ["V", "U"])
 
 
 if __name__ == "__main__":

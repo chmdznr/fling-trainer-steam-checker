@@ -78,6 +78,13 @@ with per-game detail (`d`/`enter`), single-row retry (`r`), AppID overrides
 editor (`o`), and Excel re-export (`e`). Cancel (`Cancel` button) stops cleanly
 between items and shows partial results.
 
+No need to scan again just to look at what you already have: press **Browse
+Cache** on the config form to open the results table straight from
+`fling_steam_cache.json` — zero Steam requests. Filtering, sorting, per-row
+retry and Excel export all work there; the stats line shows `Source: cache,
+prices as of YYYY-MM-DD` so you can see how old the prices are. (It's disabled
+while "Ignore cache" is checked, since there would be nothing to read.)
+
 ### Supported Country Codes
 
 AR, AU, BR, CA, CN, EU, GB, ID, IN, JP, KR, MX, NO, NZ, PH, PL, RU, SA, SE, SG, TH, TR, TW, UA, US, ZA
