@@ -3,14 +3,22 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import requests
 
 from fling_checker.cache import save_cache
 from fling_checker.cli import parse_args
 from fling_checker.config import Config
 from fling_checker.fling import scrape_fling_trainers
 from fling_checker.processor import process_new_trainers, refresh_prices
-from fling_checker.steam import get_steam_app_details
+from fling_checker.steam import (
+    cached_game_image,
+    get_steam_app_details,
+    load_game_image,
+    steam_image_url,
+)
 
 
 class BadJsonResponse:
@@ -132,6 +140,100 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["game_name"], "Cached Broken Game")
         self.assertEqual(results[0]["steam_appid"], 123)
+
+
+class ImageResponse:
+    def __init__(self, content):
+        self.content = content
+
+    def raise_for_status(self):
+        return None
+
+
+class ImageSession:
+    """Serves a canned banner payload and counts how often it was called."""
+
+    def __init__(self, content=b"\xff\xd8fakejpeg"):
+        self.content = content
+        self.calls = 0
+        self.urls = []
+
+    def get(self, url, params=None, timeout=10):
+        self.calls += 1
+        self.urls.append(url)
+        return ImageResponse(self.content)
+
+
+class ExplodingSession:
+    def get(self, *args, **kwargs):
+        raise AssertionError("network must not be used when the banner is already cached")
+
+
+class NotFoundSession:
+    def get(self, url, params=None, timeout=10):
+        return NotFoundResponse()
+
+
+class NotFoundResponse:
+    content = b""
+
+    def raise_for_status(self):
+        raise requests.HTTPError(response=SimpleNamespace(status_code=404))
+
+
+class SteamImageTests(unittest.TestCase):
+    def test_image_url_is_derived_from_appid(self):
+        self.assertEqual(
+            steam_image_url(1446780),
+            "https://cdn.cloudflare.steamstatic.com/steam/apps/1446780/header.jpg",
+        )
+        self.assertIsNone(steam_image_url(None))
+        self.assertIsNone(steam_image_url(0))
+
+    def test_cached_banner_is_read_without_any_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Config(output_dir=Path(tmp))
+            config.images_dir.mkdir(parents=True, exist_ok=True)
+            (config.images_dir / "123.jpg").write_bytes(b"jpeg-bytes")
+            config.session = ExplodingSession()
+
+            self.assertEqual(cached_game_image(123, config).read_bytes(), b"jpeg-bytes")
+            self.assertEqual(load_game_image(123, config).read_bytes(), b"jpeg-bytes")
+            self.assertIsNone(cached_game_image(None, config))
+
+    def test_zero_byte_cache_file_is_treated_as_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Config(output_dir=Path(tmp))
+            config.images_dir.mkdir(parents=True, exist_ok=True)
+            (config.images_dir / "123.jpg").write_bytes(b"")
+            session = ImageSession()
+            config.session = session
+
+            self.assertIsNone(cached_game_image(123, config))
+            self.assertEqual(load_game_image(123, config).read_bytes(), session.content)
+            self.assertEqual(session.calls, 1)
+
+    def test_banner_downloads_once_then_serves_from_disk(self):
+        payload = b"\xff\xd8realjpeg"
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Config(output_dir=Path(tmp))
+            config.session = ImageSession(payload)
+
+            path = load_game_image(456, config)
+
+            self.assertIsNotNone(path)
+            self.assertEqual(path.read_bytes(), payload)
+            self.assertEqual(path.parent, config.images_dir)
+            config.session = ExplodingSession()
+            self.assertEqual(load_game_image(456, config).read_bytes(), payload)
+
+    def test_failed_banner_request_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Config(output_dir=Path(tmp))
+            config.session = NotFoundSession()
+
+            self.assertIsNone(load_game_image(789, config))
+            self.assertIsNone(load_game_image(None, config))
 
 
 if __name__ == "__main__":

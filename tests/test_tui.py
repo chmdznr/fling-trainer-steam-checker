@@ -3,18 +3,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from fling_checker.config import Config
 from fling_checker.cache import load_cache, save_cache
 from fling_checker.fling import scrape_fling_trainers
-from fling_checker.pipeline import run_pipeline
+from fling_checker.pipeline import PipelineResult, run_pipeline
 from fling_checker.processor import process_new_trainers, refresh_prices
 from fling_checker.reporter import NullReporter, Reporter, say
 from fling_checker.tui import (
+    FlingTuiApp,
+    ResultsScreen,
     cache_price_as_of,
     cached_rows,
     detail_lines,
     filter_results,
     format_row,
+    image_to_halfblocks,
     price_display,
     sale_display,
     sort_results,
@@ -340,6 +345,142 @@ class TuiHelperTests(unittest.TestCase):
                 rows = cached_rows(load_cache(config))
             scrape.assert_not_called()
             self.assertEqual([r["game_name"] for r in rows], ["V", "U"])
+
+
+class HalfBlockImageTests(unittest.TestCase):
+    def test_two_pixel_rows_become_one_text_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "banner.png"
+            Image.new("RGB", (60, 30), (255, 0, 0)).save(path)
+
+            text = image_to_halfblocks(path, max_cols=40, max_rows=12)
+
+        self.assertIsNotNone(text)
+        # 40 cols wide at a 2:1 aspect ratio -> 10 text rows; no trailing newline
+        self.assertEqual(text.plain.count("▀"), 40 * 10)
+        self.assertEqual(text.plain.count("\n"), 9)
+        self.assertIn("#ff0000", str(text.spans[0].style).lower())
+
+    def test_row_cap_narrows_columns_instead_of_squashing(self):
+        # Steam banner ratio (460x215) scaled down: 92x43 keeps the same aspect.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "banner.jpg"
+            Image.new("RGB", (92, 43), (0, 0, 255)).save(path)
+
+            text = image_to_halfblocks(path, max_cols=76, max_rows=12)
+
+        # 76 cols would need 18 rows, so the cap narrows the picture to 51x12
+        # rather than squashing 76x12.
+        self.assertEqual(text.plain.count("▀"), 51 * 12)
+        self.assertEqual(text.plain.count("\n"), 11)
+
+    def test_unreadable_image_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "nope.png"
+            garbage = Path(tmp) / "garbage.jpg"
+            garbage.write_bytes(b"this is not a jpeg")
+
+            self.assertIsNone(image_to_halfblocks(missing))
+            self.assertIsNone(image_to_halfblocks(garbage))
+
+
+class DetailModalBannerTests(unittest.TestCase):
+    """Drives the real modal: unit tests of helpers missed the widget-level wiring."""
+
+    def _open_detail(self, config, row, force_fallback=False):
+        import asyncio
+
+        from fling_checker import tui as tui_module
+
+        async def run():
+            app = FlingTuiApp(config)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                app.push_screen(ResultsScreen(config, PipelineResult(all_results=[row])))
+                await pilot.pause()
+                await pilot.press("d")
+                await pilot.pause()
+                await pilot.pause()
+                modal = app.screen
+                box = modal.query_one("#detail-image")
+                child = box.children[0] if len(box.children) else None
+                kind = type(child).__name__ if child is not None else None
+                # Read everything while the modal is still mounted; dismissing
+                # tears its DOM down.
+                text = child.render().plain if kind == "Static" else ""
+                visible = box.visible
+                lines = len(modal.query_one("#detail-log").lines)
+                modal_name = type(modal).__name__
+                await pilot.press("escape")
+                await pilot.pause()
+                return {
+                    "modal": modal_name,
+                    "visible": visible,
+                    "text": text,
+                    "kind": kind,
+                    "lines": lines,
+                    "after": type(app.screen).__name__,
+                }
+
+        if force_fallback:
+            with patch.object(tui_module, "TerminalImage", None):
+                return asyncio.run(run())
+        return asyncio.run(run())
+
+    def _seeded_config(self, out: Path) -> Config:
+        config = Config(output_dir=out)
+        (out / ".steam_images").mkdir()
+        # sample_result() has steam_appid 111, so this file is the cache hit.
+        Image.new("RGB", (460, 215), (200, 30, 30)).save(
+            out / ".steam_images" / "111.jpg", format="JPEG"
+        )
+        return config
+
+    def test_halfblock_fallback_paints_and_closes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            config = self._seeded_config(out)
+
+            seen = self._open_detail(config, sample_result(), force_fallback=True)
+
+            self.assertEqual(seen["modal"], "DetailModal")
+            self.assertEqual(seen["kind"], "Static")
+            self.assertTrue(seen["visible"])
+            self.assertIn("▀", seen["text"])
+            self.assertGreaterEqual(seen["text"].count("\n") + 1, 4)
+            self.assertGreater(seen["lines"], 10)
+            self.assertEqual(seen["after"], "ResultsScreen")
+
+    def test_native_image_widget_is_mounted_when_available(self):
+        from fling_checker import tui as tui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._seeded_config(Path(tmp))
+
+            seen = self._open_detail(config, sample_result())
+
+            # Whatever the environment offers, the box must hold a widget and
+            # the detail text must survive next to it.
+            self.assertIsNotNone(seen["kind"])
+            self.assertTrue(seen["visible"])
+            self.assertGreater(seen["lines"], 10)
+            if tui_module.TerminalImage is not None:
+                # textual-image picks a concrete class per terminal (AutoImage,
+                # SixelImage, …), so only assert it is not the fallback.
+                self.assertIn("Image", seen["kind"])
+                self.assertNotEqual(seen["kind"], "Static")
+            else:
+                self.assertEqual(seen["kind"], "Static")
+
+    def test_detail_modal_without_appid_hides_the_banner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Config(output_dir=Path(tmp))
+
+            seen = self._open_detail(config, sample_result(steam_appid=None))
+
+            self.assertEqual(seen["modal"], "DetailModal")
+            self.assertFalse(seen["visible"])
+            self.assertEqual(seen["after"], "ResultsScreen")
 
 
 if __name__ == "__main__":

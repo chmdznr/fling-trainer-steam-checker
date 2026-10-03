@@ -11,6 +11,9 @@ fling_steam_cache.json
 # Output Excel files
 *.xlsx
 
+# Downloaded Steam banner images
+.steam_images/
+
 # Python
 __pycache__/
 *.py[cod]

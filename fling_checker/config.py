@@ -65,6 +65,11 @@ STEAM_APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
 STEAM_DECK_URL = "https://store.steampowered.com/saleaction/ajaxgetdeckappcompatibilityreport"
 
+# Steam's store banner. Its path is fully determined by the AppID, so it can be
+# built for any cached row without another appdetails call (the API's own
+# header_image field only adds a cache-busting ?t= parameter).
+STEAM_HEADER_IMAGE_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
+
 DECK_COMPAT_MAP = {
     0: "Unknown",
     1: "Unsupported",
@@ -100,6 +105,7 @@ class Config:
         self.currency = CURRENCY_MAP.get(self.country_code, DEFAULT_CURRENCY)
         self.cache_path = self.output_dir / "fling_steam_cache.json"
         self.overrides_path = self.output_dir / "fling_steam_overrides.json"
+        self.images_dir = self.output_dir / ".steam_images"
         self._load_overrides()
 
     def _load_overrides(self):

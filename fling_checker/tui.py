@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 import threading
+import webbrowser
 from pathlib import Path
 
+from rich.style import Style
 from rich.text import Text
 
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     Checkbox,
@@ -23,6 +29,7 @@ from textual.widgets import (
     ProgressBar,
     RichLog,
     Select,
+    Static,
 )
 
 from fling_checker.cache import load_cache, save_cache
@@ -31,6 +38,16 @@ from fling_checker.excel import write_excel
 from fling_checker.pipeline import PipelineResult, run_pipeline
 from fling_checker.processor import _process_single_new_trainer
 from fling_checker.reporter import Reporter
+from fling_checker.steam import cached_game_image, load_game_image, steam_image_url
+
+if not sys.stdout.isatty():
+    # textual-image probes the terminal at import time; without a TTY that probe
+    # can only fail, and its warning would bury real errors.
+    logging.getLogger("textual_image._terminal").setLevel(logging.ERROR)
+try:  # pixel-perfect when the terminal speaks a graphics protocol; optional
+    from textual_image.widget import Image as TerminalImage
+except ImportError:
+    TerminalImage = None
 
 DECK_STYLES = {
     "Verified": "black on #C6EFCE",
@@ -290,28 +307,162 @@ def detail_lines(r: dict) -> list[str]:
     return lines
 
 
+def image_to_halfblocks(img_path, max_cols: int = 76, max_rows: int = 12) -> Text | None:
+    """Draw an image with ▀ half-blocks so a text-only terminal can show it.
+
+    Each text row carries two pixel rows — foreground is the top half,
+    background the bottom half — so the row count is the image aspect ratio
+    divided by two (terminal cells are roughly twice as tall as they are wide).
+    Returns None when Pillow or the file is unavailable, or the image is broken.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+
+    try:
+        with Image.open(img_path) as im:
+            width, height = im.size
+            cols = max(1, min(max_cols, width))
+            rows = round(cols * height / (2 * width))
+            if rows > max_rows:
+                # Narrow the image as well, otherwise the row cap squashes it.
+                rows = max(1, max_rows)
+                cols = max(1, min(cols, round(rows * 2 * width / height)))
+            rows = max(1, rows)
+            im = im.convert("RGB").resize((cols, rows * 2), Image.LANCZOS)
+            pixels = im.load()
+    except Exception:  # noqa: BLE001 — a bad download must not break the modal
+        return None
+
+    def rgb(pixel) -> str:
+        return f"#{pixel[0]:02X}{pixel[1]:02X}{pixel[2]:02X}"
+
+    text = Text(no_wrap=True, end="")
+    for y in range(rows):
+        runs: list[list] = []
+        for x in range(cols):
+            key = (pixels[x, 2 * y], pixels[x, 2 * y + 1])
+            if runs and runs[-1][0] == key:
+                runs[-1][1] += 1
+            else:
+                runs.append([key, 1])
+        for (top, bottom), count in runs:
+            text.append("▀" * count, Style(color=rgb(top), bgcolor=rgb(bottom)))
+        if y < rows - 1:
+            text.append("\n")
+    return text
+
+
 # ─── Screens ─────────────────────────────────────────────────────
 
 
 class DetailModal(ModalScreen):
-    def __init__(self, result: dict) -> None:
+    BINDINGS = [
+        ("i", "open_image", "Open image"),
+        ("escape", "close_modal", "Close"),
+        ("enter", "close_modal", "Close"),
+    ]
+
+    def __init__(self, result: dict, config: Config) -> None:
         super().__init__()
         self.result = result
+        self.config = config
+        self._image_rows = 12
 
     def compose(self) -> ComposeResult:
         with Vertical(id="detail-box"):
             yield Label(f"Detail — {self.result.get('game_name', '')}", id="detail-title")
+            yield Vertical(id="detail-image")
             yield RichLog(id="detail-log", highlight=True, markup=True)
             with Horizontal(id="detail-actions"):
                 yield Button("Close", id="detail-close", variant="primary")
+                yield Button("Open image", id="detail-open")
 
     def on_mount(self) -> None:
         log = self.query_one("#detail-log", RichLog)
         for line in detail_lines(self.result):
             log.write(line)
+        self._show_image()
+
+    def _image_box(self) -> Vertical:
+        return self.query_one("#detail-image", Vertical)
+
+    def _show_image(self) -> None:
+        appid = self.result.get("steam_appid")
+        if not appid:
+            self._image_box().visible = False
+            self.query_one("#detail-open", Button).disabled = True
+            return
+        self._image_rows = self._image_rows_budget()
+        path = cached_game_image(appid, self.config)
+        if path is None:
+            self._set_image_message("Banner: loading from Steam…")
+            self.run_worker(self._fetch_image, thread=True, exclusive=True)
+            return
+        self._paint_image(path)
+
+    def _image_rows_budget(self) -> int:
+        """Banner height that still leaves the detail text and buttons visible."""
+        return max(4, min(12, self.app.size.height - 26))
+
+    def _image_widget(self, path) -> Widget | None:
+        """Best available renderer: native terminal graphics if we have it, else half-blocks."""
+        if TerminalImage is not None:
+            try:
+                return TerminalImage(path)
+            except Exception:  # noqa: BLE001 — a widget that won't build must not kill the modal
+                pass
+        text = image_to_halfblocks(path, max_rows=self._image_rows)
+        return Static(text) if text is not None else None
+
+    def _paint_image(self, path) -> None:
+        box = self._image_box()
+        widget = self._image_widget(path)
+        box.remove_children()
+        if widget is None:
+            box.visible = False
+            return
+        box.visible = True
+        box.mount(widget)
+
+    def _set_image_message(self, msg: str) -> None:
+        box = self._image_box()
+        box.visible = True
+        box.remove_children()
+        box.mount(Static(Text(msg, style="dim")))
+
+    def _fetch_image(self) -> None:
+        path = load_game_image(self.result.get("steam_appid"), self.config)
+        self.app.call_from_thread(self._image_loaded, path)
+
+    def _image_loaded(self, path) -> None:
+        try:
+            self._image_box()
+        except NoMatches:
+            return  # modal closed while the banner was downloading
+        if path is None:
+            self._set_image_message("Banner unavailable (offline, or no image on Steam).")
+            return
+        self._paint_image(path)
+
+    def action_open_image(self) -> None:
+        """Show the full-resolution banner outside the terminal."""
+        appid = self.result.get("steam_appid")
+        if not appid:
+            return
+        path = cached_game_image(appid, self.config)
+        webbrowser.open(path.as_uri() if path is not None else steam_image_url(appid))
+
+    @on(Button.Pressed, "#detail-open")
+    def open_image_button(self) -> None:
+        self.action_open_image()
 
     @on(Button.Pressed, "#detail-close")
-    def close_modal(self) -> None:
+    def close_button(self) -> None:
+        self.action_close_modal()
+
+    def action_close_modal(self) -> None:
         self.dismiss(None)
 
 
@@ -485,6 +636,7 @@ class ConfigScreen(Screen):
             self.config.output_dir.mkdir(parents=True, exist_ok=True)
             self.config.cache_path = self.config.output_dir / "fling_steam_cache.json"
             self.config.overrides_path = self.config.output_dir / "fling_steam_overrides.json"
+            self.config.images_dir = self.config.output_dir / ".steam_images"
             self.config.reload_overrides()
         self.config.currency = CURRENCY_MAP[country]
         return self.config
@@ -775,13 +927,13 @@ class ResultsScreen(Screen):
         url = str(event.row_key.value)
         for r in self.shown:
             if r.get("trainer_url") == url:
-                self.app.push_screen(DetailModal(r))
+                self.app.push_screen(DetailModal(r, self.config))
                 return
 
     def action_show_detail(self) -> None:
         result = self._selected_result()
         if result is not None:
-            self.app.push_screen(DetailModal(result))
+            self.app.push_screen(DetailModal(result, self.config))
 
     def action_retry_row(self) -> None:
         result = self._selected_result()
@@ -947,8 +1099,15 @@ class FlingTuiApp(App):
         border: solid green;
         background: $surface;
     }
+    #detail-image {
+        height: auto;
+    }
+    #detail-box {
+        height: 90%;
+    }
     #detail-log {
-        height: 20;
+        height: 1fr;
+        min-height: 4;
     }
     #ov-status {
         color: yellow;

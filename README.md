@@ -37,6 +37,8 @@ fling_checker/
 ```bash
 # Install dependencies
 pip install -r requirements.txt
+# (this repo's .venv was created by uv and has no pip, so use:
+#  uv pip install --python .venv/bin/python -r requirements.txt)
 
 # Run with defaults (ID/IDR, trainers from 2024+)
 python fling_steam_checker.py
@@ -84,6 +86,15 @@ Cache** on the config form to open the results table straight from
 retry and Excel export all work there; the stats line shows `Source: cache,
 prices as of YYYY-MM-DD` so you can see how old the prices are. (It's disabled
 while "Ignore cache" is checked, since there would be nothing to read.)
+
+The detail popup (`d`) also shows the game's Steam banner. When the terminal
+speaks a graphics protocol (iTerm2, Kitty, Sixel) it is drawn at full pixel
+accuracy; otherwise it falls back to coloured `▀` half-blocks, which work in any
+24-bit terminal. The first time you open a game its banner is downloaded to
+`.steam_images/<appid>.jpg` (next to the cache file, gitignored) and reused from
+disk after that. Press `i` (or **Open image**) to open the full-resolution banner
+outside the terminal, and `escape`/`enter` to close the popup. Banner height
+adapts to the terminal so the buttons always stay reachable.
 
 ### Supported Country Codes
 
@@ -173,7 +184,7 @@ Script menggunakan **concurrent requests** (default: 4 threads) untuk mempercepa
 pip install -r requirements.txt
 ```
 
-Packages: `requests`, `beautifulsoup4`, `openpyxl`, `tqdm`
+Packages: `requests`, `beautifulsoup4`, `openpyxl`, `tqdm`, `textual` (TUI), `Pillow` (banner rendering), `textual-image` (pixel-accurate banners in capable terminals; optional — without it the half-block fallback is used)
 
 ## Tips
 

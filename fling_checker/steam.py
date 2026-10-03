@@ -3,6 +3,8 @@
 import json
 import re
 import time
+from pathlib import Path
+
 import requests
 from tqdm import tqdm
 
@@ -10,6 +12,7 @@ from fling_checker.config import (
     print, Config,
     STEAM_SEARCH_URL, STEAM_APPDETAILS_URL,
     STEAM_REVIEWS_URL, STEAM_DECK_URL,
+    STEAM_HEADER_IMAGE_URL,
     DECK_COMPAT_MAP, DEFAULT_CURRENCY,
 )
 
@@ -225,6 +228,45 @@ def get_steam_reviews(appid: int, config: Config, reporter=None) -> dict:
         "positive_pct": pct,
         "review_desc": desc,
     }
+
+
+def steam_image_url(appid) -> str | None:
+    """Build the Steam CDN banner URL for an AppID; None when there is no AppID."""
+    if not appid:
+        return None
+    return STEAM_HEADER_IMAGE_URL.format(appid=appid)
+
+
+def cached_game_image(appid, config) -> Path | None:
+    """Local banner file for an AppID, if it has already been downloaded."""
+    if not appid:
+        return None
+    path = config.images_dir / f"{appid}.jpg"
+    return path if path.exists() and path.stat().st_size else None
+
+
+def load_game_image(appid, config, reporter=None) -> Path | None:
+    """Return the local banner file, downloading it once into the images cache.
+
+    Never raises: no AppID, a failed request, or an unwritable cache all give
+    None, so a missing picture can never block the detail view.
+    """
+    path = cached_game_image(appid, config)
+    if path is not None:
+        return path
+    url = steam_image_url(appid)
+    if url is None:
+        return None
+    resp = steam_request(url, {}, config, timeout=10, reporter=reporter)
+    if resp is None or not resp.content:
+        return None
+    try:
+        config.images_dir.mkdir(parents=True, exist_ok=True)
+        with open(config.images_dir / f"{appid}.jpg", "wb") as f:
+            f.write(resp.content)
+    except OSError:
+        return None
+    return cached_game_image(appid, config)
 
 
 def extract_price_info(app_data: dict, config: Config) -> dict:
